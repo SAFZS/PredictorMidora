@@ -85,6 +85,31 @@ function getOnlineSheetUrl(): string {
   return "https://script.google.com/macros/s/AKfycbwUxXDlXWxjvtOcvcqcJC34VCQ-Hy3-Dg8Du4w6ODHmC7KF_MXQ-vBay2NHS1GbIxMHAA/exec";
 }
 
+// Redirect-secure fetch helper to maintain method, body, and options across HTTP redirects (critical for Google Apps Script 302s on serverless runtimes)
+async function robustFetch(url: string, options: any = {}, maxRedirects = 5): Promise<Response> {
+  const response = await fetch(url, { ...options, redirect: "manual" });
+  
+  const isRedirect = [301, 302, 303, 307, 308].includes(response.status);
+  if (isRedirect && maxRedirects > 0) {
+    const redirectUrl = response.headers.get("location");
+    if (redirectUrl) {
+      console.log(`📡 Robust Redirect (${response.status}) fetched location: ${redirectUrl}. Maintaining original method [${options.method || "GET"}]`);
+      const targetUrl = redirectUrl.startsWith("http") 
+        ? redirectUrl 
+        : new URL(redirectUrl, url).toString();
+
+      // Ensure same method, headers, and payload are retained over redirection
+      const redirectOptions = {
+        ...options,
+        redirect: "manual"
+      };
+      
+      return robustFetch(targetUrl, redirectOptions, maxRedirects - 1);
+    }
+  }
+  return response;
+}
+
 // Background online spreadsheet pusher with Vercel custom headers support - fully awaited for serverless execution
 async function syncToOnlineSheet(sheetName: string, newRow: any, customUrl?: string) {
   const targetUrl = customUrl || getOnlineSheetUrl();
@@ -100,7 +125,7 @@ async function syncToOnlineSheet(sheetName: string, newRow: any, customUrl?: str
     };
 
     console.log(`📡 Dispatching network payload to ${targetUrl}...`);
-    const response = await fetch(targetUrl, {
+    const response = await robustFetch(targetUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
@@ -424,7 +449,7 @@ app.get("/api/excel/data", async (req, res) => {
       const controller = new AbortController();
       const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 seconds timeout
       
-      const response = await fetch(customUrl, { 
+      const response = await robustFetch(customUrl, { 
         method: "GET",
         signal: controller.signal
       });
@@ -498,7 +523,7 @@ app.post("/api/excel/settings/test", async (req, res) => {
       Password: "TEST_DUMMY_CONNECTION_SUCCESSFUL"
     };
 
-    const response = await fetch(onlineSheetUrl, {
+    const response = await robustFetch(onlineSheetUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(testPayload),
