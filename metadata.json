@@ -1,0 +1,6 @@
+{
+  "name": "Crash Predictor & Strategy Simulator",
+  "description": "An interactive, visually rich Crash game simulator and real-time AI analytics engine. Simulate exponential multiplier climbs of a climbing spacecraft, get real-time prognostic probabilities from Gemini, analyze historical trends, and test betting strategies like Martingale, Fibonacci, and custom limits against real mathematical distributions.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
